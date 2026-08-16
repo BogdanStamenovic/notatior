@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import math
 from dataclasses import asdict
 from pathlib import Path
 
 from .models import KeyRegion
-
 
 BLACK_PCS = {1, 3, 6, 8, 10}
 WHITE_MIDI = [midi for midi in range(21, 109) if midi % 12 not in BLACK_PCS]
@@ -64,12 +62,16 @@ def find_keyboard(video: Path, analysis_dir: Path) -> dict:
                 continue
             roi = gray[top:bottom]
             coverage = float((roi.mean(axis=0) > 80).mean())
-            vertical = float(np.percentile(np.abs(np.diff(roi.astype(float), axis=1)).mean(axis=0), 80))
+            vertical = float(
+                np.percentile(np.abs(np.diff(roi.astype(float), axis=1)).mean(axis=0), 80)
+            )
             score = coverage + vertical / 80.0 + bottom / height * 0.15
             candidates.append((score, float(timestamp), (0, top, width, bottom), frame.copy()))
     capture.release()
     if not candidates:
-        raise VisionError("No stable keyboard-like bright band was found; manual calibration is required")
+        raise VisionError(
+            "No stable keyboard-like bright band was found; manual calibration is required"
+        )
     score, timestamp, bounds, frame = max(candidates, key=lambda item: item[0])
     analysis_dir.mkdir(parents=True, exist_ok=True)
     frame_path = analysis_dir / "calibration.jpg"
@@ -98,7 +100,9 @@ def _peak_positions(values, minimum_distance: int, threshold: float):
     return sorted(peaks)
 
 
-def segment_keys(frame, bounds: tuple[int, int, int, int], first_midi: int | None = None) -> list[KeyRegion]:
+def segment_keys(
+    frame, bounds: tuple[int, int, int, int], first_midi: int | None = None
+) -> list[KeyRegion]:
     cv2, np = _imports()
     left, top, right, bottom = bounds
     roi = frame[top:bottom, left:right]
@@ -111,7 +115,9 @@ def segment_keys(frame, bounds: tuple[int, int, int, int], first_midi: int | Non
     boundaries = [0] + [p for p in peaks if expected * 0.45 < p < width - expected * 0.45] + [width]
     widths = np.diff(boundaries)
     if len(boundaries) < 22 or len(boundaries) > 62 or np.median(widths) <= 0:
-        white_count = 52 if width / max(height, 1) > 4.5 else max(14, round(width / max(height * 0.32, 1)))
+        white_count = (
+            52 if width / max(height, 1) > 4.5 else max(14, round(width / max(height * 0.32, 1)))
+        )
         boundaries = [round(i * width / white_count) for i in range(white_count + 1)]
     else:
         median = float(np.median(widths))
@@ -179,4 +185,3 @@ def polygon_sample(frame, polygon: list[list[float]], kind: str):
     if crop.size == 0:
         return np.zeros(3, dtype=np.float32)
     return np.median(crop.reshape(-1, 3), axis=0).astype(np.float32)
-

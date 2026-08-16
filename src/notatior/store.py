@@ -5,13 +5,13 @@ import re
 import shutil
 import sqlite3
 import uuid
-from datetime import UTC, datetime
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .config import project_root
-from .models import Project, STAGE_ORDER, StageName, StageState, StageStatus
+from .models import STAGE_ORDER, Project, StageName, StageState, StageStatus
 
 
 def _now() -> str:
@@ -60,7 +60,14 @@ class ProjectStore:
                 """INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET title=excluded.title, source=excluded.source,
                 updated_at=excluded.updated_at, state_json=excluded.state_json""",
-                (project.id, project.title, project.source, project.created_at, project.updated_at, payload),
+                (
+                    project.id,
+                    project.title,
+                    project.source,
+                    project.created_at,
+                    project.updated_at,
+                    payload,
+                ),
             )
         target = self.path(project.id) / "project.json"
         temporary = target.with_suffix(".json.tmp")
@@ -71,7 +78,9 @@ class ProjectStore:
         if not re.fullmatch(r"[a-f0-9]{12}", project_id):
             raise KeyError(project_id)
         with self._connect() as db:
-            row = db.execute("SELECT state_json FROM projects WHERE id = ?", (project_id,)).fetchone()
+            row = db.execute(
+                "SELECT state_json FROM projects WHERE id = ?", (project_id,)
+            ).fetchone()
         if row is None:
             raise KeyError(project_id)
         return Project(**json.loads(row["state_json"]))

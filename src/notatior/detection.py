@@ -68,7 +68,9 @@ def detect_notes(video: Path, calibration: dict, progress=None) -> list[RawNote]
                 inactive_count[index] += 1
                 active_count[index] = 0
                 if active_since[index] is not None and inactive_count[index] >= release_frames:
-                    offset = max(active_since[index] + 1 / fps, timestamp - (release_frames - 1) / fps)
+                    offset = max(
+                        active_since[index] + 1 / fps, timestamp - (release_frames - 1) / fps
+                    )
                     confidence = min(1.0, peak_distance[index] / max(thresholds[index] * 2.0, 1.0))
                     events.append(
                         RawNote(
@@ -83,7 +85,7 @@ def detect_notes(video: Path, calibration: dict, progress=None) -> list[RawNote]
                     )
                     active_since[index] = None
                     peak_distance[index] = 0.0
-            
+
         frame_index += 1
         if progress and frame_index % max(1, round(fps)) == 0:
             progress(min(0.99, frame_index / max(frame_count, 1)))
@@ -103,4 +105,3 @@ def detect_notes(video: Path, calibration: dict, progress=None) -> list[RawNote]
     capture.release()
     events.sort(key=lambda note: (note.onset, note.midi))
     return events
-

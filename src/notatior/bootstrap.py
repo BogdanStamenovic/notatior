@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import platform
 import shutil
 import stat
@@ -11,7 +10,6 @@ import urllib.request
 from pathlib import Path
 
 from .config import tool_root
-
 
 MUSESCORE_VERSION = "4.7.2.260525085"
 MUSESCORE_URL = (
@@ -83,7 +81,11 @@ def _install_musescore(root: Path) -> None:
     shutil.rmtree(extract_parent, ignore_errors=True)
     extract_parent.mkdir(parents=True)
     result = subprocess.run(
-        [str(image), "--appimage-extract"], cwd=extract_parent, capture_output=True, text=True
+        [str(image), "--appimage-extract"],
+        cwd=extract_parent,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     extracted = extract_parent / "squashfs-root"
     if result.returncode or not (extracted / "AppRun").exists():
@@ -106,10 +108,10 @@ def bootstrap(*, skip_large_tools: bool = False) -> dict:
 
 def _version(command: list[str]) -> dict:
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(command, capture_output=True, text=True, timeout=20, check=False)
         output = (result.stdout or result.stderr).splitlines()
         return {"ok": result.returncode == 0, "version": output[0] if output else "unknown"}
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return {"ok": False, "error": str(exc)}
 
 
@@ -123,4 +125,3 @@ def doctor() -> dict:
         "musescore": _version([musescore_path(), "--version"]),
         "tools": str(tool_root()),
     }
-

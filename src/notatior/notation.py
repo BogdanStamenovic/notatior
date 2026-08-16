@@ -8,7 +8,6 @@ from xml.etree import ElementTree as ET
 
 from .rhythm import TICKS_PER_QUARTER
 
-
 SHARP_NAMES = ("C", "C", "D", "D", "E", "F", "F", "G", "G", "A", "A", "B")
 SHARP_ALTERS = (0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0)
 FLAT_NAMES = ("C", "D", "D", "E", "E", "F", "G", "G", "A", "A", "B", "B")
@@ -37,23 +36,33 @@ def _pitch(midi: int, prefer_flats: bool) -> tuple[str, int, int]:
 
 def _duration_type(ticks: int) -> tuple[str, int, tuple[int, int] | None]:
     exact = {
-        96: ("whole", 0, None), 72: ("half", 1, None), 48: ("half", 0, None),
-        36: ("quarter", 1, None), 24: ("quarter", 0, None),
-        18: ("eighth", 1, None), 12: ("eighth", 0, None),
-        9: ("16th", 1, None), 6: ("16th", 0, None), 3: ("32nd", 0, None),
-        16: ("quarter", 0, (3, 2)), 8: ("eighth", 0, (3, 2)), 4: ("16th", 0, (3, 2)),
+        96: ("whole", 0, None),
+        72: ("half", 1, None),
+        48: ("half", 0, None),
+        36: ("quarter", 1, None),
+        24: ("quarter", 0, None),
+        18: ("eighth", 1, None),
+        12: ("eighth", 0, None),
+        9: ("16th", 1, None),
+        6: ("16th", 0, None),
+        3: ("32nd", 0, None),
+        16: ("quarter", 0, (3, 2)),
+        8: ("eighth", 0, (3, 2)),
+        4: ("16th", 0, (3, 2)),
     }
     return exact.get(ticks, ("eighth", 0, None))
 
 
 def _sub(parent, tag: str, text=None, **attributes):
-    node = ET.SubElement(parent, tag, attributes)
+    node = ET.SubElement(parent, tag, {key: str(value) for key, value in attributes.items()})
     if text is not None:
         node.text = str(text)
     return node
 
 
-def _append_note(parent, note: dict, duration: int, staff: int, chord: bool, tie: str | None, fifths: int):
+def _append_note(
+    parent, note: dict, duration: int, staff: int, chord: bool, tie: str | None, fifths: int
+):
     element = _sub(parent, "note")
     if chord:
         _sub(element, "chord")
@@ -95,7 +104,9 @@ def _segments(notes: list[dict], measure_len: int) -> dict[tuple[int, int, int],
                 segment["tie"] = "stop"
             if remaining > duration:
                 segment["tie"] = "start" if first else "continue"
-            result[(measure, 1 if note["hand"] == "right" else 2, int(note.get("voice", 1)))].append(segment)
+            result[
+                (measure, 1 if note["hand"] == "right" else 2, int(note.get("voice", 1)))
+            ].append(segment)
             start += duration
             remaining -= duration
             first = False
@@ -109,7 +120,10 @@ def write_musicxml(score: dict, output: Path, title: str = "Notatior transcripti
     denominator = int(score["meter"]["denominator"])
     measure_len = round(numerator * 4 / denominator * TICKS_PER_QUARTER)
     groups = _segments(notes, measure_len)
-    max_tick = max((round((n["onset_quarters"] + n["duration_quarters"]) * TICKS_PER_QUARTER) for n in notes), default=measure_len)
+    max_tick = max(
+        (round((n["onset_quarters"] + n["duration_quarters"]) * TICKS_PER_QUARTER) for n in notes),
+        default=measure_len,
+    )
     measures = max(1, math.ceil(max_tick / measure_len))
     root = ET.Element("score-partwise", version="4.0")
     work = _sub(root, "work")
@@ -159,7 +173,9 @@ def write_musicxml(score: dict, output: Path, title: str = "Notatior transcripti
             first_stream = False
             cursor = 0
             chord_start = None
-            for note in sorted(groups[(measure_index, staff, voice)], key=lambda n: (n["start_tick"], n["midi"])):
+            for note in sorted(
+                groups[(measure_index, staff, voice)], key=lambda n: (n["start_tick"], n["midi"])
+            ):
                 start = int(note["start_tick"])
                 if start > cursor:
                     forward = _sub(measure, "forward")
@@ -170,10 +186,20 @@ def write_musicxml(score: dict, output: Path, title: str = "Notatior transcripti
                 chord = chord_start == start
                 tie = note.get("tie")
                 if tie == "continue":
-                    _append_note(measure, note, int(note["duration_tick"]), staff, chord, "stop", key["fifths"])
+                    _append_note(
+                        measure,
+                        note,
+                        int(note["duration_tick"]),
+                        staff,
+                        chord,
+                        "stop",
+                        key["fifths"],
+                    )
                     # MusicXML cannot express start+stop with this helper; the next segment remains audible.
                 else:
-                    _append_note(measure, note, int(note["duration_tick"]), staff, chord, tie, key["fifths"])
+                    _append_note(
+                        measure, note, int(note["duration_tick"]), staff, chord, tie, key["fifths"]
+                    )
                 chord_start = start
                 if not chord:
                     cursor += int(note["duration_tick"])
@@ -230,4 +256,3 @@ def write_midi(score: dict, output: Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(header + b"".join(tracks))
     return output
-

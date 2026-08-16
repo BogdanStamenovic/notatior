@@ -50,4 +50,3 @@ def musescore_path() -> str:
         if candidate.exists():
             return str(candidate)
     return "musescore"
-

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict
+from itertools import pairwise
 from statistics import median
 
 from .models import RawNote, ScoreNote
-
 
 TICKS_PER_QUARTER = 24
 METERS = ((2, 4), (3, 4), (4, 4), (6, 8))
@@ -61,7 +61,9 @@ def rank_tempos(notes: list[RawNote], requested_bpm: float | None = None) -> lis
     return selected
 
 
-def choose_meter(notes: list[RawNote], bpm: float, phase: float, requested: str | None = None) -> dict:
+def choose_meter(
+    notes: list[RawNote], bpm: float, phase: float, requested: str | None = None
+) -> dict:
     candidates = []
     meters = [tuple(map(int, requested.split("/")))] if requested else METERS
     onsets = [(note.onset - phase) * bpm / 60 for note in notes]
@@ -94,7 +96,7 @@ def assign_hands(notes: list[RawNote]) -> None:
         pitches = sorted(note.midi for note in unknown)
         split = 60
         if len(pitches) >= 2:
-            gaps = [(b - a, (a + b) / 2) for a, b in zip(pitches, pitches[1:])]
+            gaps = [(b - a, (a + b) / 2) for a, b in pairwise(pitches)]
             largest, midpoint = max(gaps)
             if largest >= 5:
                 split = round(midpoint)
@@ -114,7 +116,10 @@ def assign_hands(notes: list[RawNote]) -> None:
 def allocate_voices(notes: list[ScoreNote]) -> None:
     for hand in ("left", "right"):
         ends: list[float] = []
-        hand_notes = sorted((note for note in notes if note.hand == hand), key=lambda n: (n.onset_quarters, -n.duration_quarters))
+        hand_notes = sorted(
+            (note for note in notes if note.hand == hand),
+            key=lambda n: (n.onset_quarters, -n.duration_quarters),
+        )
         chord_voice: dict[float, int] = {}
         for note in hand_notes:
             rounded_onset = round(note.onset_quarters, 6)
@@ -163,4 +168,3 @@ def normalize(
         "ticks_per_quarter": TICKS_PER_QUARTER,
         "notes": [asdict(note) for note in score_notes],
     }
-

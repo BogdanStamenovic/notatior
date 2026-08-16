@@ -17,7 +17,9 @@ def is_url(value: str) -> bool:
     return urlparse(value).scheme in {"http", "https"}
 
 
-def run_checked(command: list[str], *, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+def run_checked(
+    command: list[str], *, timeout: int | None = None
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(command, check=True, capture_output=True, text=True, timeout=timeout)
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
@@ -105,4 +107,3 @@ def extract_audio(video: Path, output: Path, sample_rate: int = 22050) -> Path:
         ]
     )
     return output
-

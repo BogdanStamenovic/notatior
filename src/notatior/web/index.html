@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notatior</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="#">Notatior <span>video → score</span></a>
+    <div id="connection" class="connection">local</div>
+  </header>
+  <main>
+    <section id="dashboard">
+      <div class="hero">
+        <p class="eyebrow">PIANO TRANSCRIPTION WORKBENCH</p>
+        <h1>Turn falling notes<br>into a score you can trust.</h1>
+        <p>Detect keys visually, normalize the rhythm, then check the result against the audio.</p>
+      </div>
+      <div class="new-project card">
+        <h2>New transcription</h2>
+        <form id="url-form">
+          <label>YouTube or video URL</label>
+          <div class="input-row"><input id="source" type="url" required placeholder="https://youtu.be/…"><button>Analyze</button></div>
+        </form>
+        <div class="divider"><span>or</span></div>
+        <form id="upload-form">
+          <label class="file-button">Choose a local video<input id="upload" type="file" accept="video/*" required></label>
+          <button class="secondary">Upload and analyze</button>
+        </form>
+      </div>
+      <section class="recent"><div class="section-title"><h2>Projects</h2><button id="refresh" class="text-button">Refresh</button></div><div id="projects" class="project-grid"></div></section>
+    </section>
+    <section id="workspace" hidden>
+      <button id="back" class="text-button">← All projects</button>
+      <div class="project-heading"><div><p class="eyebrow">ACTIVE PROJECT</p><h1 id="project-title"></h1></div><div id="project-meta"></div></div>
+      <div id="graph" class="graph"></div>
+      <div class="workspace-grid">
+        <section id="stage-panel" class="card stage-panel"></section>
+        <aside class="card inspector"><h3>Inspector</h3><div id="inspector"></div></aside>
+      </div>
+    </section>
+  </main>
+  <div id="toast" role="status"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
+

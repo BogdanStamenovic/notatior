@@ -57,14 +57,18 @@ def _transcribe(args) -> int:
             pipeline.run(project.id, stop_at_review=not args.accept_draft)
             project = store.get(project.id)
             review = next(
-                (name for name, state in project.stages.items() if state["status"] == StageStatus.REVIEW),
+                (
+                    name
+                    for name, state in project.stages.items()
+                    if state["status"] == StageStatus.REVIEW
+                ),
                 None,
             )
             if review and args.accept_draft:
                 pipeline.approve(project.id, review)
                 continue
             break
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - the CLI converts pipeline failures to exit status.
         print(f"Transcription failed: {exc}", file=sys.stderr)
         return 1
     project = store.get(project.id)
@@ -82,7 +86,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     command = args.command or "serve"
     if command == "serve":
-        return _serve(getattr(args, "host", "127.0.0.1"), getattr(args, "port", 8765), not getattr(args, "no_browser", False))
+        return _serve(
+            getattr(args, "host", "127.0.0.1"),
+            getattr(args, "port", 8765),
+            not getattr(args, "no_browser", False),
+        )
     if command == "transcribe":
         return _transcribe(args)
     if command == "doctor":
@@ -99,4 +107,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

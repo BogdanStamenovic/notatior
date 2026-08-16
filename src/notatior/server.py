@@ -1,0 +1,223 @@
+from __future__ import annotations
+
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from importlib.resources import files
+from pathlib import Path
+from typing import Annotated, Any
+
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.websockets import WebSocketDisconnect
+from pydantic import BaseModel
+
+from .models import StageName, StageStatus
+from .pipeline import Pipeline, PipelineError
+from .store import ProjectStore
+from .vision import update_pitch_anchor
+
+
+class ProjectCreate(BaseModel):
+    source: str
+    title: str | None = None
+
+
+class SettingsUpdate(BaseModel):
+    bpm: float | None = None
+    meter: str | None = None
+
+
+class AnchorUpdate(BaseModel):
+    key_index: int
+    midi: int
+
+
+ARTIFACTS = {
+    "calibration-frame": "analysis/calibration.jpg",
+    "calibration": "analysis/calibration.json",
+    "raw-notes": "analysis/raw-notes.json",
+    "score-data": "score/score.json",
+    "musicxml": "score/score.musicxml",
+    "midi": "score/score.mid",
+    "source-audio": "analysis/source.wav",
+    "rendered-audio": "analysis/rendered.wav",
+    "validation": "analysis/validation.json",
+}
+
+
+def create_app(store: ProjectStore | None = None) -> FastAPI:
+    store = store or ProjectStore()
+    executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="notatior")
+    pipeline = Pipeline(store)
+    app = FastAPI(title="Notatior", version="0.1.0")
+
+    def submit(project_id: str, stage: str | None = None):
+        executor.submit(pipeline.run, project_id, stage, True)
+
+    @app.get("/api/v1/projects")
+    def list_projects():
+        return [project.to_dict() for project in store.list()]
+
+    @app.post("/api/v1/projects", status_code=201)
+    def create_project(request: ProjectCreate):
+        project = store.create(request.source, request.title)
+        submit(project.id)
+        return project.to_dict()
+
+    @app.post("/api/v1/projects/upload", status_code=201)
+    async def upload_project(file: Annotated[UploadFile, File()]):
+        if not file.filename:
+            raise HTTPException(400, "Upload needs a filename")
+        project = store.create("pending-upload", Path(file.filename).stem)
+        suffix = Path(file.filename).suffix.lower()
+        uploaded = store.artifact(project.id, f"source/upload{suffix}")
+        with uploaded.open("wb") as destination:
+            while chunk := await file.read(1024 * 1024):
+                destination.write(chunk)
+        project.source = str(uploaded)
+        store.save(project)
+        submit(project.id)
+        return project.to_dict()
+
+    @app.get("/api/v1/projects/{project_id}")
+    def get_project(project_id: str):
+        try:
+            return store.get(project_id).to_dict()
+        except KeyError:
+            raise HTTPException(404, "Project not found") from None
+
+    @app.patch("/api/v1/projects/{project_id}/settings")
+    def update_settings(project_id: str, request: SettingsUpdate):
+        try:
+            project = store.get(project_id)
+        except KeyError:
+            raise HTTPException(404, "Project not found") from None
+        if request.bpm is not None and not 20 <= request.bpm <= 300:
+            raise HTTPException(422, "BPM must be between 20 and 300")
+        if request.meter is not None:
+            try:
+                beats, unit = map(int, request.meter.split("/"))
+            except (ValueError, AttributeError):
+                raise HTTPException(422, "Meter must look like 4/4") from None
+            if beats < 1 or unit not in {2, 4, 8, 16}:
+                raise HTTPException(422, "Unsupported meter")
+        project.settings.update({"bpm": request.bpm, "meter": request.meter})
+        store.invalidate_after(project, StageName.DETECTION)
+        return store.get(project_id).to_dict()
+
+    @app.post("/api/v1/projects/{project_id}/stages/{stage}/run", status_code=202)
+    def run_stage(project_id: str, stage: str):
+        try:
+            StageName(stage)
+            store.get(project_id)
+            submit(project_id, stage)
+        except (KeyError, ValueError):
+            raise HTTPException(404, "Project or stage not found") from None
+        return {"accepted": True}
+
+    @app.post("/api/v1/projects/{project_id}/stages/{stage}/approve")
+    def approve_stage(project_id: str, stage: str):
+        try:
+            pipeline.approve(project_id, stage)
+            position = list(StageName).index(StageName(stage))
+            if position + 1 < len(StageName):
+                submit(project_id, list(StageName)[position + 1].value)
+            return store.get(project_id).to_dict()
+        except (KeyError, ValueError, PipelineError) as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/api/v1/projects/{project_id}/calibration/anchor")
+    def set_anchor(project_id: str, request: AnchorUpdate):
+        calibration = store.read_json(project_id, "analysis/calibration.json")
+        if calibration is None:
+            raise HTTPException(404, "Calibration not found")
+        if not 0 <= request.key_index < len(calibration["keys"]) or not 0 <= request.midi <= 127:
+            raise HTTPException(422, "Invalid key index or MIDI pitch")
+        update_pitch_anchor(calibration, request.key_index, request.midi)
+        store.write_json(project_id, "analysis/calibration.json", calibration)
+        project = store.get(project_id)
+        store.invalidate_after(project, StageName.CALIBRATION)
+        return calibration
+
+    @app.get("/api/v1/projects/{project_id}/data/{name}")
+    def get_data(project_id: str, name: str):
+        relative = ARTIFACTS.get(name)
+        if not relative or not relative.endswith(".json"):
+            raise HTTPException(404, "Data not found")
+        value = store.read_json(project_id, relative)
+        if value is None:
+            raise HTTPException(404, "Data not ready")
+        return value
+
+    @app.put("/api/v1/projects/{project_id}/data/raw-notes")
+    def put_notes(project_id: str, payload: list[dict[str, Any]]):
+        for note in payload:
+            if (
+                not {"id", "midi", "onset", "offset"} <= note.keys()
+                or note["offset"] <= note["onset"]
+            ):
+                raise HTTPException(
+                    422, "Each note requires a valid id, MIDI pitch, onset, and offset"
+                )
+        store.write_json(project_id, "analysis/raw-notes.json", payload)
+        project = store.get(project_id)
+        store.invalidate_after(project, StageName.DETECTION)
+        return payload
+
+    @app.put("/api/v1/projects/{project_id}/data/score-data")
+    def put_score(project_id: str, payload: dict[str, Any]):
+        if not {"bpm", "meter", "notes"} <= payload.keys():
+            raise HTTPException(422, "Score needs bpm, meter, and notes")
+        store.write_json(project_id, "score/score.json", payload)
+        project = store.get(project_id)
+        state = project.stages[StageName.SCORE.value]
+        state.update(status=StageStatus.STALE, approved=False)
+        store.invalidate_after(project, StageName.SCORE)
+        return payload
+
+    @app.get("/api/v1/projects/{project_id}/artifact/{name}")
+    def artifact(project_id: str, name: str):
+        relative = ARTIFACTS.get(name)
+        if not relative:
+            raise HTTPException(404, "Artifact not found")
+        path = store.artifact(project_id, relative)
+        if not path.is_file():
+            raise HTTPException(404, "Artifact not ready")
+        return FileResponse(path)
+
+    @app.get("/api/v1/projects/{project_id}/exports")
+    def exports(project_id: str):
+        export_dir = store.artifact(project_id, "exports")
+        return [
+            {"name": path.name, "size": path.stat().st_size}
+            for path in export_dir.iterdir()
+            if path.is_file()
+        ]
+
+    @app.get("/api/v1/projects/{project_id}/exports/{filename}")
+    def download_export(project_id: str, filename: str):
+        if Path(filename).name != filename:
+            raise HTTPException(404, "Export not found")
+        path = store.artifact(project_id, f"exports/{filename}")
+        if not path.is_file():
+            raise HTTPException(404, "Export not found")
+        return FileResponse(path, filename=filename)
+
+    @app.websocket("/api/v1/projects/{project_id}/events")
+    async def events(websocket: WebSocket, project_id: str):
+        await websocket.accept()
+        previous = None
+        try:
+            while True:
+                current = store.get(project_id).to_dict()
+                if current != previous:
+                    await websocket.send_json(current)
+                    previous = current
+                await asyncio.sleep(0.7)
+        except (WebSocketDisconnect, KeyError):
+            return
+
+    static = files("notatior").joinpath("web")
+    app.mount("/", StaticFiles(directory=str(static), html=True), name="web")
+    return app

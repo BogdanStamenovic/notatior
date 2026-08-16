@@ -37,7 +37,11 @@ def apply_dynamics(score: dict, source_audio: Path) -> dict:
         rms = float(np.sqrt(np.mean(audio[start:end] ** 2))) if end > start else 0.0
         energies.append(rms)
     positive = np.asarray([value for value in energies if value > 0], dtype=float)
-    low, high = (float(np.percentile(positive, 10)), float(np.percentile(positive, 90))) if positive.size else (0.0, 1.0)
+    low, high = (
+        (float(np.percentile(positive, 10)), float(np.percentile(positive, 90)))
+        if positive.size
+        else (0.0, 1.0)
+    )
     span = max(high - low, 1e-6)
     for note, energy in zip(score["notes"], energies):
         normalized = max(0.0, min(1.0, (energy - low) / span))
@@ -46,10 +50,13 @@ def apply_dynamics(score: dict, source_audio: Path) -> dict:
     measure_quarters = score["meter"]["numerator"] * 4 / score["meter"]["denominator"]
     dynamics = []
     previous = None
-    measure_count = max(1, int(max((n["onset_quarters"] for n in score["notes"]), default=0) / measure_quarters) + 1)
+    measure_count = max(
+        1, int(max((n["onset_quarters"] for n in score["notes"]), default=0) / measure_quarters) + 1
+    )
     for measure in range(measure_count):
         velocities = [
-            n["velocity"] for n in score["notes"]
+            n["velocity"]
+            for n in score["notes"]
             if measure <= n["onset_quarters"] / measure_quarters < measure + 1
         ]
         if not velocities:
@@ -68,7 +75,9 @@ def render_score(musicxml: Path, output: Path) -> Path:
     environment = dict(os.environ)
     environment.setdefault("QT_QPA_PLATFORM", "offscreen")
     command = [musescore_path(), "--no-webview", "--export-to", str(output), str(musicxml)]
-    result = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=300)
+    result = subprocess.run(
+        command, capture_output=True, text=True, env=environment, timeout=300, check=False
+    )
     if result.returncode or not output.exists():
         raise RuntimeError(f"MuseScore export failed: {result.stderr[-1200:]}")
     return output
@@ -81,10 +90,16 @@ def validate_audio(score: dict, source_audio: Path, rendered_audio: Path) -> dic
     render_rate, rendered = _read_wav(rendered_audio)
     if source_rate != render_rate:
         length = round(len(rendered) * source_rate / render_rate)
-        rendered = np.interp(np.linspace(0, len(rendered) - 1, length), np.arange(len(rendered)), rendered)
+        rendered = np.interp(
+            np.linspace(0, len(rendered) - 1, length), np.arange(len(rendered)), rendered
+        )
     hop = 2048
-    source_env = np.asarray([np.sqrt(np.mean(source[i : i + hop] ** 2)) for i in range(0, len(source) - hop, hop)])
-    render_env = np.asarray([np.sqrt(np.mean(rendered[i : i + hop] ** 2)) for i in range(0, len(rendered) - hop, hop)])
+    source_env = np.asarray(
+        [np.sqrt(np.mean(source[i : i + hop] ** 2)) for i in range(0, len(source) - hop, hop)]
+    )
+    render_env = np.asarray(
+        [np.sqrt(np.mean(rendered[i : i + hop] ** 2)) for i in range(0, len(rendered) - hop, hop)]
+    )
     size = min(len(source_env), len(render_env))
     if size < 2:
         correlation = 0.0
@@ -94,7 +109,9 @@ def validate_audio(score: dict, source_audio: Path, rendered_audio: Path) -> dic
     findings = []
     for note in score["notes"]:
         if float(note.get("confidence", 1)) < 0.55:
-            findings.append({"note_id": note["id"], "kind": "low_visual_confidence", "severity": "warning"})
+            findings.append(
+                {"note_id": note["id"], "kind": "low_visual_confidence", "severity": "warning"}
+            )
     return {
         "status": "review" if findings or correlation < 0.55 else "pass",
         "envelope_correlation": round(correlation, 4),
@@ -103,4 +120,3 @@ def validate_audio(score: dict, source_audio: Path, rendered_audio: Path) -> dic
         "findings": findings,
         "method": "aligned RMS envelope; pitch/timing findings retain visual confidence evidence",
     }
-
