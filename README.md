@@ -35,9 +35,10 @@ Ownbox installs the Python environment and invokes the idempotent dependency boo
 
 ## Pipeline
 
-The UI guides each project through ingest, keyboard calibration, raw note detection, rhythm
-normalization, score construction, audio validation, dynamics, and export. Calibration, score,
-and validation are review gates; changing upstream data marks dependent results as stale.
+On the `testing` branch the UI guides each project through ingest, manual key-region calibration,
+exact raw note detection, hand grouping, score construction, synchronized audio review, and
+export. Dynamics remains as a compatibility stage but is deliberately a no-op. Calibration,
+score, and validation are review gates; changing upstream data marks dependent results as stale.
 
 ### Headless transcription
 
@@ -55,18 +56,17 @@ notatior transcribe ./performance.mp4 --bpm 120 --meter 4/4 --accept-draft
 ## Review workflow
 
 1. **Ingest** acquires the video, probes it, and extracts mono analysis audio.
-2. **Calibration** finds the first keyboard frame. Correct the keyboard bounds, inspect every
-   overlay, and set a known MIDI anchor (middle C is `60`) before approving it.
-3. **Detection** uses color distance and temporal hysteresis to create editable note events.
-4. **Rhythm** searches a fixed BPM, meter, and bar phase, then quantizes to standard/dotted/triplet
-   values down to a 32nd note.
-5. **Score** assigns hands and voices, infers spelling/key signature, and introduces conservative
-   treble/bass clef changes. Edit notes and approve the draft. Direct MusicXML is validated with
-   MuseScore; dense/irregular scores automatically use a MIDI-to-MusicXML canonicalization pass so
-   the delivered file is guaranteed to open in the bundled renderer.
-6. **Validation** renders the MusicXML through MuseScore and compares aligned energy and chroma
-   against the source. Review low-confidence findings and listen to both versions.
-7. **Dynamics** maps relative source energy to MIDI velocity, dynamics, and longer hairpins.
+2. **Calibration** shows a clean keyboard frame. Drag a tight rectangle inside every key area that
+   changes colour, enter its MIDI pitch, optionally fix its hand, and save before approval.
+3. **Detection** compares only those rectangles with their colour on the selected clean frame.
+   The first changed frame is note-on and the first clean frame is note-off.
+4. **Rhythm** converts the exact seconds to the chosen display BPM without tempo search, phase
+   correction, quantization, or snapping.
+5. **Score** groups simultaneous pitch clusters into left/right hands, allocates notation voices,
+   and displays both a piano roll and rendered staff notation. Every note remains editable.
+6. **Validation** renders the score and supplies one synchronized transport for the original audio,
+   transcription audio, and animated falling-note view.
+7. **Dynamics** is disabled; it adds no markings or velocity changes.
 8. **Export** produces MusicXML, MIDI, PDF, validation audio/report, and a project archive.
 
 An edit marks only downstream stages stale. Projects are atomic and resumable after interruption.

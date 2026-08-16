@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from importlib.resources import files
 from pathlib import Path
@@ -15,7 +16,9 @@ from pydantic import BaseModel
 from .models import StageName, StageStatus
 from .pipeline import Pipeline, PipelineError
 from .store import ProjectStore
-from .vision import segment_keys, update_pitch_anchor
+from .vision import polygon_sample, segment_keys, update_pitch_anchor
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ProjectCreate(BaseModel):
@@ -42,6 +45,20 @@ class BoundsUpdate(BaseModel):
     white_key_count: int | None = None
 
 
+class ManualRegion(BaseModel):
+    midi: int
+    left: float
+    top: float
+    right: float
+    bottom: float
+    threshold: float = 14.0
+    hand: str | None = None
+
+
+class ManualRegionsUpdate(BaseModel):
+    regions: list[ManualRegion]
+
+
 ARTIFACTS = {
     "calibration-frame": "analysis/calibration.jpg",
     "calibration": "analysis/calibration.json",
@@ -52,6 +69,7 @@ ARTIFACTS = {
     "source-audio": "analysis/source.wav",
     "rendered-audio": "analysis/rendered.wav",
     "validation": "analysis/validation.json",
+    "score-preview": "score/preview.pdf",
 }
 
 
@@ -62,7 +80,19 @@ def create_app(store: ProjectStore | None = None) -> FastAPI:
     app = FastAPI(title="Notatior", version="0.1.0")
 
     def submit(project_id: str, stage: str | None = None):
-        executor.submit(pipeline.run, project_id, stage, True)
+        future = executor.submit(pipeline.run, project_id, stage, True)
+
+        def report_failure(done):
+            try:
+                done.result()
+            except PipelineError as exc:
+                # Pipeline errors are persisted in project state and belong in the UI,
+                # not as noisy unhandled ThreadPoolExecutor tracebacks.
+                LOGGER.info("Project %s stopped: %s", project_id, exc)
+            except Exception:
+                LOGGER.exception("Unexpected background failure for project %s", project_id)
+
+        future.add_done_callback(report_failure)
 
     @app.get("/api/v1/projects")
     def list_projects():
@@ -186,6 +216,60 @@ def create_app(store: ProjectStore | None = None) -> FastAPI:
         store.invalidate_after(project, StageName.CALIBRATION)
         return calibration
 
+    @app.put("/api/v1/projects/{project_id}/calibration/regions")
+    def set_manual_regions(project_id: str, request: ManualRegionsUpdate):
+        import cv2
+
+        calibration = store.read_json(project_id, "analysis/calibration.json")
+        frame_path = store.artifact(project_id, "analysis/calibration.jpg")
+        if calibration is None or not frame_path.exists():
+            raise HTTPException(404, "Calibration not found")
+        frame = cv2.imread(str(frame_path))
+        if frame is None:
+            raise HTTPException(409, "Calibration frame cannot be read")
+        height, width = frame.shape[:2]
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        if not request.regions:
+            raise HTTPException(422, "Draw at least one key region")
+        keys = []
+        for index, region in enumerate(request.regions):
+            if not (
+                0 <= region.midi <= 127
+                and 0 <= region.left < region.right <= width
+                and 0 <= region.top < region.bottom <= height
+                and 2 <= region.threshold <= 100
+                and region.hand in {None, "left", "right"}
+            ):
+                raise HTTPException(422, f"Invalid key region {index + 1}")
+            polygon = [
+                [region.left, region.top], [region.right, region.top],
+                [region.right, region.bottom], [region.left, region.bottom],
+            ]
+            baseline = polygon_sample(lab, polygon, "manual")
+            keys.append({
+                "index": index,
+                "midi": region.midi,
+                "kind": "manual",
+                "polygon": polygon,
+                "baseline_lab": [round(float(value), 4) for value in baseline],
+                "threshold": region.threshold,
+                "hand": region.hand,
+            })
+        calibration.update(
+            mode="manual-regions",
+            keys=keys,
+            bounds=[
+                min(key["polygon"][0][0] for key in keys),
+                min(key["polygon"][0][1] for key in keys),
+                max(key["polygon"][2][0] for key in keys),
+                max(key["polygon"][2][1] for key in keys),
+            ],
+        )
+        store.write_json(project_id, "analysis/calibration.json", calibration)
+        project = store.get(project_id)
+        store.invalidate_after(project, StageName.CALIBRATION)
+        return calibration
+
     @app.get("/api/v1/projects/{project_id}/data/{name}")
     def get_data(project_id: str, name: str):
         relative = ARTIFACTS.get(name)
@@ -235,6 +319,8 @@ def create_app(store: ProjectStore | None = None) -> FastAPI:
     @app.get("/api/v1/projects/{project_id}/exports")
     def exports(project_id: str):
         export_dir = store.artifact(project_id, "exports")
+        if not export_dir.exists():
+            return []
         return [
             {"name": path.name, "size": path.stat().st_size}
             for path in export_dir.iterdir()
@@ -261,7 +347,7 @@ def create_app(store: ProjectStore | None = None) -> FastAPI:
                     await websocket.send_json(current)
                     previous = current
                 await asyncio.sleep(0.7)
-        except (WebSocketDisconnect, KeyError):
+        except (WebSocketDisconnect, KeyError, RuntimeError):
             return
 
     static = files("notatior").joinpath("web")
