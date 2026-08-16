@@ -80,13 +80,16 @@ class Pipeline:
         try:
             getattr(self, f"_run_{stage.value}")(project_id)
             status = StageStatus.REVIEW if stage in REVIEW_STAGES else StageStatus.COMPLETE
+            message = "Ready for review" if status == StageStatus.REVIEW else "Complete"
+            if stage == StageName.DYNAMICS:
+                message = "Disabled on testing branch; score left unchanged"
             self._set(
                 project_id,
                 stage,
                 status,
                 progress=1.0,
                 approved=stage not in REVIEW_STAGES,
-                message="Ready for review" if status == StageStatus.REVIEW else "Complete",
+                message=message,
             )
         except Exception as exc:
             self._set(

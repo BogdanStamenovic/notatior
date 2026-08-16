@@ -85,12 +85,11 @@ def create_app(store: ProjectStore | None = None) -> FastAPI:
         def report_failure(done):
             try:
                 done.result()
-            except PipelineError as exc:
-                # Pipeline errors are persisted in project state and belong in the UI,
-                # not as noisy unhandled ThreadPoolExecutor tracebacks.
-                LOGGER.info("Project %s stopped: %s", project_id, exc)
-            except Exception:
-                LOGGER.exception("Unexpected background failure for project %s", project_id)
+            except Exception as exc:  # noqa: BLE001 - background boundary; state has traceback
+                # Stage failures are already persisted with a traceback in the project's
+                # analysis directory. Keep the terminal readable and surface the concise
+                # error through project state instead of an executor traceback.
+                LOGGER.warning("Project %s stopped: %s", project_id, exc)
 
         future.add_done_callback(report_failure)
 
