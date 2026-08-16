@@ -19,30 +19,25 @@ def detect_notes(video: Path, calibration: dict, progress=None) -> list[RawNote]
     fps = float(capture.get(cv2.CAP_PROP_FPS) or 30.0)
     frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     keys = calibration["keys"]
-    baseline_samples: list[list[object]] = [[] for _ in keys]
     first_frame_time = float(calibration.get("frame_time", 0))
+    # The old detector learned an "off" colour from three seconds of video.  Falling
+    # notes during that window poisoned the baseline and could leave a key held for
+    # minutes.  Manual regions now carry the colour from the exact calibration frame.
     capture.set(cv2.CAP_PROP_POS_MSEC, first_frame_time * 1000)
-    for _ in range(max(24, round(fps * 3.0))):
-        ok, frame = capture.read()
-        if not ok:
-            break
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        for index, key in enumerate(keys):
-            baseline_samples[index].append(polygon_sample(lab, key["polygon"], key["kind"]))
-    baselines = []
-    for samples in baseline_samples:
-        if not samples:
-            baselines.append(np.zeros(3, dtype=np.float32))
-            continue
-        stacked = np.stack(samples)
-        chroma = np.linalg.norm(stacked[:, 1:3] - 128.0, axis=1)
-        neutral = stacked[np.argsort(chroma)[: max(3, len(stacked) // 2)]]
-        baselines.append(np.median(neutral, axis=0))
-    noise = [
-        float(np.median([np.linalg.norm(sample - base) for sample in samples])) if samples else 0.0
-        for samples, base in zip(baseline_samples, baselines)
+    ok, baseline_frame = capture.read()
+    if not ok:
+        capture.release()
+        raise VisionError("Cannot read the selected calibration frame")
+    baseline_image = cv2.cvtColor(baseline_frame, cv2.COLOR_BGR2LAB)
+    baselines = [
+        np.asarray(
+            key.get("baseline_lab")
+            or polygon_sample(baseline_image, key["polygon"], key.get("kind", "manual")),
+            dtype=np.float32,
+        )
+        for key in keys
     ]
-    thresholds = [max(10.0, value * 5.0 + 4.0) for value in noise]
+    thresholds = [float(key.get("threshold", calibration.get("threshold", 14.0))) for key in keys]
     capture.set(cv2.CAP_PROP_POS_MSEC, first_frame_time * 1000)
     active_count = [0] * len(keys)
     inactive_count = [0] * len(keys)
@@ -50,8 +45,10 @@ def detect_notes(video: Path, calibration: dict, progress=None) -> list[RawNote]
     peak_distance = [0.0] * len(keys)
     events: list[RawNote] = []
     frame_index = round(first_frame_time * fps)
-    attack_frames = 2
-    release_frames = 2
+    # A transition is timestamped on the frame where it is actually visible.  Separate
+    # release thresholds prevent tiny compression noise without extending notes.
+    attack_frames = 1
+    release_frames = 1
     while True:
         ok, frame = capture.read()
         if not ok:
@@ -63,7 +60,12 @@ def detect_notes(video: Path, calibration: dict, progress=None) -> list[RawNote]
         for index, key in enumerate(keys):
             sample = polygon_sample(lab, key["polygon"], key["kind"])
             distance = float(np.linalg.norm(sample - baselines[index]))
-            is_active = distance >= thresholds[index]
+            threshold = thresholds[index]
+            is_active = (
+                distance >= threshold
+                if active_since[index] is None
+                else distance >= threshold * 0.65
+            )
             if is_active:
                 active_count[index] += 1
                 inactive_count[index] = 0
@@ -77,7 +79,7 @@ def detect_notes(video: Path, calibration: dict, progress=None) -> list[RawNote]
                     offset = max(
                         active_since[index] + 1 / fps, timestamp - (release_frames - 1) / fps
                     )
-                    confidence = min(1.0, peak_distance[index] / max(thresholds[index] * 2.0, 1.0))
+                    confidence = min(1.0, peak_distance[index] / max(threshold * 2.0, 1.0))
                     events.append(
                         RawNote(
                             id=uuid.uuid4().hex[:12],
@@ -86,7 +88,11 @@ def detect_notes(video: Path, calibration: dict, progress=None) -> list[RawNote]
                             offset=offset,
                             confidence=confidence,
                             hand=key.get("hand"),
-                            evidence={"peak_color_distance": round(peak_distance[index], 3)},
+                            evidence={
+                                "peak_color_distance": round(peak_distance[index], 3),
+                                "threshold": round(threshold, 3),
+                                "detector": "manual-region-transition-v1",
+                            },
                         )
                     )
                     active_since[index] = None

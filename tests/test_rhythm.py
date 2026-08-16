@@ -1,7 +1,7 @@
 from itertools import pairwise
 
 from notatior.models import RawNote
-from notatior.rhythm import normalize, rank_tempos
+from notatior.rhythm import exact_transcription, normalize, rank_tempos
 
 
 def notes():
@@ -58,3 +58,13 @@ def test_cross_bar_tuplet_is_nudged_to_renderable_fragments():
     first_fragment = 48 - start % 48
     assert first_fragment in {3, 6, 9, 12, 18, 24, 36, 48}
     assert duration - first_fragment in {3, 6, 9, 12, 18, 24, 36, 48}
+
+
+def test_exact_transcription_preserves_video_times():
+    raw = [RawNote("n", 64, 1.234, 1.987)]
+    score = exact_transcription(raw, 60, "4/4")
+    note = score["notes"][0]
+    assert note["onset_quarters"] == 1.234
+    assert note["duration_quarters"] == 1.987 - 1.234
+    assert score["timing_mode"] == "exact-video-timestamps"
+    assert score["dynamics"] == []

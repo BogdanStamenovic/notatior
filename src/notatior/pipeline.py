@@ -8,12 +8,12 @@ from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
-from .audio import apply_dynamics, render_score, validate_audio
+from .audio import render_score, validate_audio
 from .detection import detect_notes
 from .media import acquire, extract_audio
 from .models import STAGE_ORDER, RawNote, StageName, StageStatus
 from .notation import write_midi, write_musicxml
-from .rhythm import normalize
+from .rhythm import exact_transcription
 from .store import ProjectStore
 from .vision import find_keyboard
 
@@ -156,7 +156,7 @@ class Pipeline:
             RawNote(**item)
             for item in self.store.read_json(project_id, "analysis/raw-notes.json", [])
         ]
-        score = normalize(raw, project.settings.get("bpm"), project.settings.get("meter"))
+        score = exact_transcription(raw, project.settings.get("bpm"), project.settings.get("meter"))
         self.store.write_json(project_id, "score/score.json", score)
 
     def _run_score(self, project_id: str) -> None:
@@ -195,11 +195,14 @@ class Pipeline:
         self.store.write_json(project_id, "analysis/validation.json", report)
 
     def _run_dynamics(self, project_id: str) -> None:
-        project = self.store.get(project_id)
         score = self.store.read_json(project_id, "score/score.json")
-        apply_dynamics(score, self.store.artifact(project_id, "analysis/source.wav"))
+        if score is None:
+            raise PipelineError("Score is missing")
+        # Deliberately disabled on the testing branch. Keep the stage as a no-op so
+        # existing projects and clients remain schema-compatible.
+        score["dynamics"] = []
+        score["hairpins"] = []
         self.store.write_json(project_id, "score/score.json", score)
-        self._write_score_files(project_id, project.title, score)
 
     def _run_export(self, project_id: str) -> None:
         project = self.store.get(project_id)

@@ -113,6 +113,49 @@ def assign_hands(notes: list[RawNote]) -> None:
                 previous[hand] = median(assigned)
 
 
+def exact_transcription(
+    raw: list[RawNote], requested_bpm: float | None = None, requested_meter: str | None = None
+) -> dict:
+    """Build a score without tempo search or rhythmic snapping.
+
+    Raw video timestamps remain authoritative. BPM only controls how those seconds are
+    represented in notation/MIDI; it never moves an onset or changes a duration.
+    """
+    bpm = float(requested_bpm or 60.0)
+    try:
+        numerator, denominator = map(int, (requested_meter or "4/4").split("/"))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("Meter must look like 4/4") from exc
+    assign_hands(raw)
+    quarter = 60.0 / bpm
+    score_notes = [
+        ScoreNote(
+            id=note.id,
+            midi=note.midi,
+            onset_quarters=max(0.0, note.onset / quarter),
+            duration_quarters=max(1 / TICKS_PER_QUARTER, (note.offset - note.onset) / quarter),
+            hand=note.hand or ("left" if note.midi < 60 else "right"),
+            confidence=note.confidence,
+        )
+        for note in raw
+    ]
+    allocate_voices(score_notes)
+    meter = {"numerator": numerator, "denominator": denominator, "score": 0.0}
+    measure_quarters = numerator * 4 / denominator
+    return {
+        "bpm": bpm,
+        "phase_seconds": 0.0,
+        "meter": meter,
+        "tempo_candidates": [],
+        "ticks_per_quarter": TICKS_PER_QUARTER,
+        "timing_mode": "exact-video-timestamps",
+        "notes": [asdict(note) for note in score_notes],
+        "clefs": infer_clefs(score_notes, measure_quarters),
+        "dynamics": [],
+        "hairpins": [],
+    }
+
+
 def allocate_voices(notes: list[ScoreNote]) -> None:
     for hand in ("left", "right"):
         ends: list[float] = []
