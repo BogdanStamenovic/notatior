@@ -39,3 +39,22 @@ def test_clef_change_requires_sustained_register():
         "4/4",
     )
     assert {item["clef"] for item in normalized["clefs"]} == {"bass"}
+
+
+def test_dense_overlaps_are_limited_to_four_notation_voices():
+    dense = [
+        RawNote(str(index), 60 + index, index * 0.05, 3.0, hand="right") for index in range(12)
+    ]
+    result = normalize(dense, 120, "4/4")
+    assert max(note["voice"] for note in result["notes"]) <= 4
+    assert all(note["duration_quarters"] > 0 for note in result["notes"])
+
+
+def test_cross_bar_tuplet_is_nudged_to_renderable_fragments():
+    result = normalize([RawNote("cross", 60, 6.833333, 7.375, hand="right")], 120, "2/4")
+    note = result["notes"][0]
+    start = round(note["onset_quarters"] * 24)
+    duration = round(note["duration_quarters"] * 24)
+    first_fragment = 48 - start % 48
+    assert first_fragment in {3, 6, 9, 12, 18, 24, 36, 48}
+    assert duration - first_fragment in {3, 6, 9, 12, 18, 24, 36, 48}

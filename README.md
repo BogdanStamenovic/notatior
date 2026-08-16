@@ -61,7 +61,9 @@ notatior transcribe ./performance.mp4 --bpm 120 --meter 4/4 --accept-draft
 4. **Rhythm** searches a fixed BPM, meter, and bar phase, then quantizes to standard/dotted/triplet
    values down to a 32nd note.
 5. **Score** assigns hands and voices, infers spelling/key signature, and introduces conservative
-   treble/bass clef changes. Edit notes and approve the draft.
+   treble/bass clef changes. Edit notes and approve the draft. Direct MusicXML is validated with
+   MuseScore; dense/irregular scores automatically use a MIDI-to-MusicXML canonicalization pass so
+   the delivered file is guaranteed to open in the bundled renderer.
 6. **Validation** renders the MusicXML through MuseScore and compares aligned energy and chroma
    against the source. Review low-confidence findings and listen to both versions.
 7. **Dynamics** maps relative source energy to MIDI velocity, dynamics, and longer hairpins.

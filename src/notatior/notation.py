@@ -34,7 +34,7 @@ def _pitch(midi: int, prefer_flats: bool) -> tuple[str, int, int]:
     return names[pc], alters[pc], midi // 12 - 1
 
 
-def _duration_type(ticks: int) -> tuple[str, int, tuple[int, int] | None]:
+def _duration_type(ticks: int) -> tuple[str | None, int, tuple[int, int] | None]:
     exact = {
         96: ("whole", 0, None),
         72: ("half", 1, None),
@@ -46,11 +46,8 @@ def _duration_type(ticks: int) -> tuple[str, int, tuple[int, int] | None]:
         9: ("16th", 1, None),
         6: ("16th", 0, None),
         3: ("32nd", 0, None),
-        16: ("quarter", 0, (3, 2)),
-        8: ("eighth", 0, (3, 2)),
-        4: ("16th", 0, (3, 2)),
     }
-    return exact.get(ticks, ("eighth", 0, None))
+    return exact.get(ticks, (None, 0, None))
 
 
 def _sub(parent, tag: str, text=None, **attributes):
@@ -80,25 +77,41 @@ def _append_note(
         _sub(pitch, "alter", alter)
     _sub(pitch, "octave", octave)
     _sub(element, "duration", duration)
+    if tie_stop:
+        _sub(element, "tie", type="stop")
+    if tie_start:
+        _sub(element, "tie", type="start")
     _sub(element, "voice", int(note.get("voice", 1)))
     kind, dots, tuplet = _duration_type(duration)
-    _sub(element, "type", kind)
+    if tuplet and (tie_start or tie_stop):
+        kind, dots, tuplet = None, 0, None
+    if kind:
+        _sub(element, "type", kind)
     for _ in range(dots):
         _sub(element, "dot")
     if tuplet:
         timing = _sub(element, "time-modification")
         _sub(timing, "actual-notes", tuplet[0])
         _sub(timing, "normal-notes", tuplet[1])
+    _sub(element, "staff", staff)
     if tie_start or tie_stop:
-        if tie_stop:
-            _sub(element, "tie", type="stop")
-        if tie_start:
-            _sub(element, "tie", type="start")
         notations = _sub(element, "notations")
         if tie_stop:
             _sub(notations, "tied", type="stop")
         if tie_start:
             _sub(notations, "tied", type="start")
+
+
+def _append_rest(parent, duration: int, staff: int, voice: int = 1):
+    element = _sub(parent, "note")
+    _sub(element, "rest", measure="yes")
+    _sub(element, "duration", duration)
+    _sub(element, "voice", voice)
+    kind, dots, _ = _duration_type(duration)
+    if kind:
+        _sub(element, "type", kind)
+        for _ in range(dots):
+            _sub(element, "dot")
     _sub(element, "staff", staff)
 
 
@@ -201,37 +214,51 @@ def write_musicxml(score: dict, output: Path, title: str = "Notatior transcripti
             _sub(direction, "staff", dynamic.get("staff", 1))
         streams = sorted(key for key in groups if key[0] == measure_index)
         first_stream = True
-        for _, staff, voice in streams:
-            if not first_stream:
-                backup = _sub(measure, "backup")
-                _sub(backup, "duration", measure_len)
-            first_stream = False
-            cursor = 0
-            chord_start = None
-            for note in sorted(
-                groups[(measure_index, staff, voice)], key=lambda n: (n["start_tick"], n["midi"])
-            ):
-                start = int(note["start_tick"])
-                if start > cursor:
+        for staff in (1, 2):
+            staff_streams = [
+                (voice, key) for key in streams if key[1] == staff for voice in [key[2]]
+            ]
+            if not staff_streams:
+                if not first_stream:
+                    backup = _sub(measure, "backup")
+                    _sub(backup, "duration", measure_len)
+                first_stream = False
+                _append_rest(measure, measure_len, staff)
+                continue
+            for voice, stream_key in staff_streams:
+                if not first_stream:
+                    backup = _sub(measure, "backup")
+                    _sub(backup, "duration", measure_len)
+                first_stream = False
+                cursor = 0
+                chord_start = None
+                for note in sorted(groups[stream_key], key=lambda n: (n["start_tick"], n["midi"])):
+                    start = int(note["start_tick"])
+                    if start > cursor:
+                        forward = _sub(measure, "forward")
+                        _sub(forward, "duration", start - cursor)
+                        _sub(forward, "voice", voice)
+                        _sub(forward, "staff", staff)
+                        cursor = start
+                    chord = chord_start == start
+                    _append_note(
+                        measure,
+                        note,
+                        int(note["duration_tick"]),
+                        staff,
+                        chord,
+                        bool(note.get("tie_start")),
+                        bool(note.get("tie_stop")),
+                        key["fifths"],
+                    )
+                    chord_start = start
+                    if not chord:
+                        cursor += int(note["duration_tick"])
+                if cursor < measure_len:
                     forward = _sub(measure, "forward")
-                    _sub(forward, "duration", start - cursor)
+                    _sub(forward, "duration", measure_len - cursor)
                     _sub(forward, "voice", voice)
                     _sub(forward, "staff", staff)
-                    cursor = start
-                chord = chord_start == start
-                _append_note(
-                    measure,
-                    note,
-                    int(note["duration_tick"]),
-                    staff,
-                    chord,
-                    bool(note.get("tie_start")),
-                    bool(note.get("tie_stop")),
-                    key["fifths"],
-                )
-                chord_start = start
-                if not chord:
-                    cursor += int(note["duration_tick"])
     ET.indent(root, space="  ")
     output.parent.mkdir(parents=True, exist_ok=True)
     ET.ElementTree(root).write(output, encoding="utf-8", xml_declaration=True)

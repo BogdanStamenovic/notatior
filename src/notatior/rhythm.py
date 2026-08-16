@@ -116,25 +116,44 @@ def assign_hands(notes: list[RawNote]) -> None:
 def allocate_voices(notes: list[ScoreNote]) -> None:
     for hand in ("left", "right"):
         ends: list[float] = []
+        active_groups: list[list[ScoreNote]] = []
         hand_notes = sorted(
             (note for note in notes if note.hand == hand),
             key=lambda n: (n.onset_quarters, -n.duration_quarters),
         )
-        chord_voice: dict[float, int] = {}
+        groups: list[list[ScoreNote]] = []
         for note in hand_notes:
-            rounded_onset = round(note.onset_quarters, 6)
-            if rounded_onset in chord_voice:
-                note.voice = chord_voice[rounded_onset]
-                continue
+            if not groups or abs(note.onset_quarters - groups[-1][0].onset_quarters) > 1e-6:
+                groups.append([note])
+            else:
+                groups[-1].append(note)
+        for group in groups:
+            onset = group[0].onset_quarters
+            group_end = max(note.onset_quarters + note.duration_quarters for note in group)
             for index, end in enumerate(ends):
-                if end <= note.onset_quarters + 1e-6:
-                    note.voice = index + 1
-                    ends[index] = note.onset_quarters + note.duration_quarters
+                if end <= onset + 1e-6:
+                    voice = index + 1
+                    ends[index] = group_end
+                    active_groups[index] = group
                     break
             else:
-                ends.append(note.onset_quarters + note.duration_quarters)
-                note.voice = len(ends)
-            chord_voice[rounded_onset] = note.voice
+                if len(ends) < 4:
+                    ends.append(group_end)
+                    active_groups.append(group)
+                    voice = len(ends)
+                else:
+                    index = min(range(4), key=lambda item: ends[item])
+                    for previous in active_groups[index]:
+                        available = onset - previous.onset_quarters
+                        previous.duration_quarters = max(
+                            3 / TICKS_PER_QUARTER,
+                            min(previous.duration_quarters, available),
+                        )
+                    ends[index] = group_end
+                    active_groups[index] = group
+                    voice = index + 1
+            for note in group:
+                note.voice = voice
 
 
 def infer_clefs(notes: list[ScoreNote], measure_quarters: float) -> list[dict]:
@@ -177,6 +196,40 @@ def infer_clefs(notes: list[ScoreNote], measure_quarters: float) -> list[dict]:
     return result
 
 
+def regularize_barlines(notes: list[ScoreNote], measure_quarters: float) -> None:
+    """Nudge cross-bar events so each tied fragment has a renderable written duration."""
+    measure_ticks = round(measure_quarters * TICKS_PER_QUARTER)
+    # Tuplet fragments (4/8/16 ticks) need their complete rhythmic group and cannot safely be
+    # split in isolation at a barline. Prefer nearby binary/dotted fragments there.
+    written_ticks = {3, 6, 9, 12, 18, 24, 36, 48, 72, 96, measure_ticks}
+    for note in notes:
+        start = round(note.onset_quarters * TICKS_PER_QUARTER)
+        duration = max(3, round(note.duration_quarters * TICKS_PER_QUARTER))
+        if start // measure_ticks == (start + duration - 1) // measure_ticks:
+            continue
+        best = None
+        for start_delta in range(-6, 7):
+            candidate_start = max(0, start + start_delta)
+            for duration_delta in range(-6, 7):
+                candidate_duration = max(3, duration + duration_delta)
+                cursor = candidate_start
+                remaining = candidate_duration
+                fragments = []
+                while remaining:
+                    fragment = min(remaining, measure_ticks - cursor % measure_ticks)
+                    fragments.append(fragment)
+                    cursor += fragment
+                    remaining -= fragment
+                if all(fragment in written_ticks for fragment in fragments):
+                    cost = abs(start_delta) + abs(duration_delta) * 0.65
+                    candidate = (cost, abs(start_delta), candidate_start, candidate_duration)
+                    if best is None or candidate < best:
+                        best = candidate
+        if best:
+            note.onset_quarters = best[2] / TICKS_PER_QUARTER
+            note.duration_quarters = best[3] / TICKS_PER_QUARTER
+
+
 def normalize(
     raw: list[RawNote], requested_bpm: float | None = None, requested_meter: str | None = None
 ) -> dict:
@@ -199,8 +252,9 @@ def normalize(
                 confidence=note.confidence,
             )
         )
-    allocate_voices(score_notes)
     measure_quarters = meter["numerator"] * 4 / meter["denominator"]
+    regularize_barlines(score_notes, measure_quarters)
+    allocate_voices(score_notes)
     return {
         "bpm": choice["bpm"],
         "phase_seconds": choice["phase_seconds"],

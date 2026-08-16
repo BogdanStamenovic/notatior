@@ -164,11 +164,25 @@ class Pipeline:
         score = self.store.read_json(project_id, "score/score.json")
         if score is None:
             raise PipelineError("Normalized score is missing")
-        write_musicxml(
-            score, self.store.artifact(project_id, "score/score.musicxml"), project.title
-        )
-        write_midi(score, self.store.artifact(project_id, "score/score.mid"))
+        self._write_score_files(project_id, project.title, score)
         self.store.write_json(project_id, "score/score.json", score)
+
+    def _write_score_files(self, project_id: str, title: str, score: dict) -> None:
+        musicxml = self.store.artifact(project_id, "score/score.musicxml")
+        midi = self.store.artifact(project_id, "score/score.mid")
+        preview = self.store.artifact(project_id, "score/preview.pdf")
+        write_musicxml(score, musicxml, title)
+        write_midi(score, midi)
+        try:
+            render_score(musicxml, preview)
+            score["musicxml_source"] = "direct"
+        except RuntimeError:
+            canonical = self.store.artifact(project_id, "score/canonical.musicxml")
+            canonical.unlink(missing_ok=True)
+            render_score(midi, canonical)
+            canonical.replace(musicxml)
+            render_score(musicxml, preview)
+            score["musicxml_source"] = "musescore-midi-canonicalization"
 
     def _run_validation(self, project_id: str) -> None:
         xml = self.store.artifact(project_id, "score/score.musicxml")
@@ -185,10 +199,7 @@ class Pipeline:
         score = self.store.read_json(project_id, "score/score.json")
         apply_dynamics(score, self.store.artifact(project_id, "analysis/source.wav"))
         self.store.write_json(project_id, "score/score.json", score)
-        write_musicxml(
-            score, self.store.artifact(project_id, "score/score.musicxml"), project.title
-        )
-        write_midi(score, self.store.artifact(project_id, "score/score.mid"))
+        self._write_score_files(project_id, project.title, score)
 
     def _run_export(self, project_id: str) -> None:
         project = self.store.get(project_id)
