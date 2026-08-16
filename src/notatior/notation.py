@@ -61,7 +61,14 @@ def _sub(parent, tag: str, text=None, **attributes):
 
 
 def _append_note(
-    parent, note: dict, duration: int, staff: int, chord: bool, tie: str | None, fifths: int
+    parent,
+    note: dict,
+    duration: int,
+    staff: int,
+    chord: bool,
+    tie_start: bool,
+    tie_stop: bool,
+    fifths: int,
 ):
     element = _sub(parent, "note")
     if chord:
@@ -82,10 +89,16 @@ def _append_note(
         timing = _sub(element, "time-modification")
         _sub(timing, "actual-notes", tuplet[0])
         _sub(timing, "normal-notes", tuplet[1])
-    if tie:
-        _sub(element, "tie", type=tie)
+    if tie_start or tie_stop:
+        if tie_stop:
+            _sub(element, "tie", type="stop")
+        if tie_start:
+            _sub(element, "tie", type="start")
         notations = _sub(element, "notations")
-        _sub(notations, "tied", type=tie)
+        if tie_stop:
+            _sub(notations, "tied", type="stop")
+        if tie_start:
+            _sub(notations, "tied", type="start")
     _sub(element, "staff", staff)
 
 
@@ -100,10 +113,8 @@ def _segments(notes: list[dict], measure_len: int) -> dict[tuple[int, int, int],
             inside = start % measure_len
             duration = min(remaining, measure_len - inside)
             segment = dict(note, start_tick=inside, duration_tick=duration)
-            if not first:
-                segment["tie"] = "stop"
-            if remaining > duration:
-                segment["tie"] = "start" if first else "continue"
+            segment["tie_stop"] = not first
+            segment["tie_start"] = remaining > duration
             result[
                 (measure, 1 if note["hand"] == "right" else 2, int(note.get("voice", 1)))
             ].append(segment)
@@ -135,6 +146,14 @@ def write_musicxml(score: dict, output: Path, title: str = "Notatior transcripti
     dynamics_by_measure = defaultdict(list)
     for dynamic in score.get("dynamics", []):
         dynamics_by_measure[int(dynamic.get("measure", 0))].append(dynamic)
+    clefs_by_measure = defaultdict(list)
+    for clef in score.get("clefs", []):
+        clefs_by_measure[int(clef["measure"])].append(clef)
+    hairpin_starts = defaultdict(list)
+    hairpin_stops = defaultdict(list)
+    for number, hairpin in enumerate(score.get("hairpins", []), 1):
+        hairpin_starts[int(hairpin["start_measure"])].append((number, hairpin))
+        hairpin_stops[int(hairpin["end_measure"])].append((number, hairpin))
     for measure_index in range(measures):
         measure = _sub(part, "measure", number=measure_index + 1)
         if measure_index == 0:
@@ -158,6 +177,22 @@ def write_musicxml(score: dict, output: Path, title: str = "Notatior transcripti
             _sub(metronome, "beat-unit", "quarter")
             _sub(metronome, "per-minute", score["bpm"])
             _sub(direction, "sound", tempo=score["bpm"])
+        elif clefs_by_measure.get(measure_index):
+            attributes = _sub(measure, "attributes")
+            for clef in clefs_by_measure[measure_index]:
+                node = _sub(attributes, "clef", number=clef["staff"])
+                _sub(node, "sign", "G" if clef["clef"] == "treble" else "F")
+                _sub(node, "line", 2 if clef["clef"] == "treble" else 4)
+        for number, hairpin in hairpin_starts.get(measure_index, []):
+            direction = _sub(measure, "direction", placement="below")
+            dtype = _sub(direction, "direction-type")
+            _sub(dtype, "wedge", type=hairpin["type"], number=number)
+            _sub(direction, "staff", hairpin.get("staff", 1))
+        for number, hairpin in hairpin_stops.get(measure_index, []):
+            direction = _sub(measure, "direction", placement="below")
+            dtype = _sub(direction, "direction-type")
+            _sub(dtype, "wedge", type="stop", number=number)
+            _sub(direction, "staff", hairpin.get("staff", 1))
         for dynamic in dynamics_by_measure.get(measure_index, []):
             direction = _sub(measure, "direction", placement="below")
             dtype = _sub(direction, "direction-type")
@@ -184,22 +219,16 @@ def write_musicxml(score: dict, output: Path, title: str = "Notatior transcripti
                     _sub(forward, "staff", staff)
                     cursor = start
                 chord = chord_start == start
-                tie = note.get("tie")
-                if tie == "continue":
-                    _append_note(
-                        measure,
-                        note,
-                        int(note["duration_tick"]),
-                        staff,
-                        chord,
-                        "stop",
-                        key["fifths"],
-                    )
-                    # MusicXML cannot express start+stop with this helper; the next segment remains audible.
-                else:
-                    _append_note(
-                        measure, note, int(note["duration_tick"]), staff, chord, tie, key["fifths"]
-                    )
+                _append_note(
+                    measure,
+                    note,
+                    int(note["duration_tick"]),
+                    staff,
+                    chord,
+                    bool(note.get("tie_start")),
+                    bool(note.get("tie_stop")),
+                    key["fifths"],
+                )
                 chord_start = start
                 if not chord:
                     cursor += int(note["duration_tick"])

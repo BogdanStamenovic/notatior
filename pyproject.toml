@@ -29,13 +29,9 @@ notatior = "notatior.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/notatior"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"src/notatior/web" = "notatior/web"
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-

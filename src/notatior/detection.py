@@ -20,30 +20,36 @@ def detect_notes(video: Path, calibration: dict, progress=None) -> list[RawNote]
     frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     keys = calibration["keys"]
     baseline_samples: list[list[object]] = [[] for _ in keys]
-    capture.set(cv2.CAP_PROP_POS_MSEC, float(calibration.get("frame_time", 0)) * 1000)
-    for _ in range(max(12, round(fps * 1.2))):
+    first_frame_time = float(calibration.get("frame_time", 0))
+    capture.set(cv2.CAP_PROP_POS_MSEC, first_frame_time * 1000)
+    for _ in range(max(24, round(fps * 3.0))):
         ok, frame = capture.read()
         if not ok:
             break
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
         for index, key in enumerate(keys):
             baseline_samples[index].append(polygon_sample(lab, key["polygon"], key["kind"]))
-    baselines = [
-        np.median(np.stack(samples), axis=0) if samples else np.zeros(3, dtype=np.float32)
-        for samples in baseline_samples
-    ]
+    baselines = []
+    for samples in baseline_samples:
+        if not samples:
+            baselines.append(np.zeros(3, dtype=np.float32))
+            continue
+        stacked = np.stack(samples)
+        chroma = np.linalg.norm(stacked[:, 1:3] - 128.0, axis=1)
+        neutral = stacked[np.argsort(chroma)[: max(3, len(stacked) // 2)]]
+        baselines.append(np.median(neutral, axis=0))
     noise = [
         float(np.median([np.linalg.norm(sample - base) for sample in samples])) if samples else 0.0
         for samples, base in zip(baseline_samples, baselines)
     ]
     thresholds = [max(10.0, value * 5.0 + 4.0) for value in noise]
-    capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    capture.set(cv2.CAP_PROP_POS_MSEC, first_frame_time * 1000)
     active_count = [0] * len(keys)
     inactive_count = [0] * len(keys)
     active_since: list[float | None] = [None] * len(keys)
     peak_distance = [0.0] * len(keys)
     events: list[RawNote] = []
-    frame_index = 0
+    frame_index = round(first_frame_time * fps)
     attack_frames = 2
     release_frames = 2
     while True:

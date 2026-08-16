@@ -32,3 +32,14 @@ def test_writes_parseable_musicxml_and_midi(tmp_path: Path):
     assert root.find(".//dynamics/mf") is not None
     assert midi_path.read_bytes().startswith(b"MThd")
     assert b"MTrk" in midi_path.read_bytes()
+
+
+def test_long_note_has_start_and_stop_tie_in_middle_measure(tmp_path: Path):
+    score = normalize([RawNote("long", 60, 0, 5, hand="right")], 120, "4/4")
+    root = ET.parse(write_musicxml(score, tmp_path / "long.musicxml")).getroot()
+    tied_both_ways = [
+        note
+        for note in root.findall(".//note")
+        if {tie.attrib["type"] for tie in note.findall("tie")} == {"start", "stop"}
+    ]
+    assert tied_both_ways

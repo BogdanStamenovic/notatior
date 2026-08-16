@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from .models import StageName, StageStatus
 from .pipeline import Pipeline, PipelineError
 from .store import ProjectStore
-from .vision import update_pitch_anchor
+from .vision import segment_keys, update_pitch_anchor
 
 
 class ProjectCreate(BaseModel):
@@ -31,6 +31,14 @@ class SettingsUpdate(BaseModel):
 class AnchorUpdate(BaseModel):
     key_index: int
     midi: int
+
+
+class BoundsUpdate(BaseModel):
+    left: int
+    top: int
+    right: int
+    bottom: int
+    first_midi: int | None = None
 
 
 ARTIFACTS = {
@@ -135,6 +143,43 @@ def create_app(store: ProjectStore | None = None) -> FastAPI:
         if not 0 <= request.key_index < len(calibration["keys"]) or not 0 <= request.midi <= 127:
             raise HTTPException(422, "Invalid key index or MIDI pitch")
         update_pitch_anchor(calibration, request.key_index, request.midi)
+        store.write_json(project_id, "analysis/calibration.json", calibration)
+        project = store.get(project_id)
+        store.invalidate_after(project, StageName.CALIBRATION)
+        return calibration
+
+    @app.post("/api/v1/projects/{project_id}/calibration/bounds")
+    def set_bounds(project_id: str, request: BoundsUpdate):
+        import cv2
+
+        calibration = store.read_json(project_id, "analysis/calibration.json")
+        frame_path = store.artifact(project_id, "analysis/calibration.jpg")
+        if calibration is None or not frame_path.exists():
+            raise HTTPException(404, "Calibration not found")
+        frame = cv2.imread(str(frame_path))
+        height, width = frame.shape[:2]
+        bounds = (request.left, request.top, request.right, request.bottom)
+        if not (
+            0 <= request.left < request.right <= width
+            and 0 <= request.top < request.bottom <= height
+        ):
+            raise HTTPException(422, "Bounds must form a rectangle inside the frame")
+        keys = segment_keys(frame, bounds, request.first_midi)
+        calibration.update(
+            bounds=list(bounds),
+            first_midi=keys[0].midi if keys else None,
+            keys=[
+                {
+                    "index": key.index,
+                    "midi": key.midi,
+                    "kind": key.kind,
+                    "polygon": key.polygon,
+                    "active_lab": key.active_lab,
+                    "hand": key.hand,
+                }
+                for key in keys
+            ],
+        )
         store.write_json(project_id, "analysis/calibration.json", calibration)
         project = store.get(project_id)
         store.invalidate_after(project, StageName.CALIBRATION)

@@ -30,3 +30,12 @@ def test_tempo_ranking_returns_distinct_review_candidates():
         candidates, key=lambda item: (item["score"], abs(item["bpm"] - 100))
     )
     assert all(abs(a["bpm"] - b["bpm"]) >= 3 for a, b in pairwise(candidates))
+
+
+def test_clef_change_requires_sustained_register():
+    normalized = normalize(
+        [RawNote(str(index), 45, index * 2, index * 2 + 1, hand="right") for index in range(6)],
+        120,
+        "4/4",
+    )
+    assert {item["clef"] for item in normalized["clefs"]} == {"bass"}

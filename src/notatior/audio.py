@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import wave
+from itertools import pairwise
 from pathlib import Path
 
 from .config import musescore_path
@@ -67,6 +68,20 @@ def apply_dynamics(score: dict, source_audio: Path) -> dict:
             dynamics.append({"measure": measure, "staff": 1, "mark": mark, "velocity": value})
             previous = mark
     score["dynamics"] = dynamics
+    hairpins = []
+    for left, right in pairwise(dynamics):
+        distance = right["measure"] - left["measure"]
+        delta = right["velocity"] - left["velocity"]
+        if distance >= 2 and abs(delta) >= 12:
+            hairpins.append(
+                {
+                    "start_measure": left["measure"],
+                    "end_measure": right["measure"],
+                    "staff": 1,
+                    "type": "crescendo" if delta > 0 else "diminuendo",
+                }
+            )
+    score["hairpins"] = hairpins
     return score
 
 
@@ -85,6 +100,7 @@ def render_score(musicxml: Path, output: Path) -> Path:
 
 def validate_audio(score: dict, source_audio: Path, rendered_audio: Path) -> dict:
     import numpy as np
+    from scipy.signal import correlate, correlation_lags
 
     source_rate, source = _read_wav(source_audio)
     render_rate, rendered = _read_wav(rendered_audio)
@@ -100,12 +116,60 @@ def validate_audio(score: dict, source_audio: Path, rendered_audio: Path) -> dic
     render_env = np.asarray(
         [np.sqrt(np.mean(rendered[i : i + hop] ** 2)) for i in range(0, len(rendered) - hop, hop)]
     )
-    size = min(len(source_env), len(render_env))
+    if len(source_env) and len(render_env) and source_env.std() and render_env.std():
+        cross = correlate(
+            source_env - np.mean(source_env),
+            render_env - np.mean(render_env),
+            mode="full",
+            method="fft",
+        )
+        lags = correlation_lags(len(source_env), len(render_env), mode="full")
+        lag = int(lags[int(np.argmax(cross))])
+    else:
+        lag = 0
+    source_start = max(0, lag)
+    render_start = max(0, -lag)
+    size = min(len(source_env) - source_start, len(render_env) - render_start)
     if size < 2:
         correlation = 0.0
     else:
-        a, b = source_env[:size], render_env[:size]
+        a = source_env[source_start : source_start + size]
+        b = render_env[render_start : render_start + size]
         correlation = float(np.corrcoef(a, b)[0, 1]) if a.std() and b.std() else 0.0
+
+    def chroma(signal):
+        window_size = 4096
+        window = np.hanning(window_size)
+        frequencies = np.fft.rfftfreq(window_size, 1 / source_rate)
+        valid = frequencies >= 27.5
+        pitch_classes = np.zeros(len(frequencies), dtype=int)
+        pitch_classes[valid] = np.mod(
+            np.rint(69 + 12 * np.log2(frequencies[valid] / 440.0)).astype(int), 12
+        )
+        frames = []
+        for index in range(0, len(signal) - window_size, hop):
+            spectrum = np.abs(np.fft.rfft(signal[index : index + window_size] * window))
+            vector = np.asarray(
+                [spectrum[valid & (pitch_classes == pc)].sum() for pc in range(12)],
+                dtype=float,
+            )
+            norm = np.linalg.norm(vector)
+            frames.append(vector / norm if norm else vector)
+        return np.asarray(frames)
+
+    source_chroma = chroma(source)
+    render_chroma = chroma(rendered)
+    chroma_size = min(len(source_chroma) - source_start, len(render_chroma) - render_start)
+    if chroma_size > 0:
+        source_slice = source_chroma[source_start : source_start + chroma_size]
+        render_slice = render_chroma[render_start : render_start + chroma_size]
+        frame_similarity = np.sum(source_slice * render_slice, axis=1)
+        chroma_similarity = float(np.mean(frame_similarity))
+        stride = max(1, len(frame_similarity) // 300)
+        heatmap = [round(float(value), 3) for value in frame_similarity[::stride]]
+    else:
+        chroma_similarity = 0.0
+        heatmap = []
     findings = []
     for note in score["notes"]:
         if float(note.get("confidence", 1)) < 0.55:
@@ -113,10 +177,13 @@ def validate_audio(score: dict, source_audio: Path, rendered_audio: Path) -> dic
                 {"note_id": note["id"], "kind": "low_visual_confidence", "severity": "warning"}
             )
     return {
-        "status": "review" if findings or correlation < 0.55 else "pass",
+        "status": "review" if findings or correlation < 0.55 or chroma_similarity < 0.5 else "pass",
         "envelope_correlation": round(correlation, 4),
+        "chroma_similarity": round(chroma_similarity, 4),
+        "alignment_seconds": round(lag * hop / source_rate, 4),
+        "similarity_timeline": heatmap,
         "source_duration": round(len(source) / source_rate, 3),
         "rendered_duration": round(len(rendered) / source_rate, 3),
         "findings": findings,
-        "method": "aligned RMS envelope; pitch/timing findings retain visual confidence evidence",
+        "method": "FFT-aligned RMS envelope and 12-bin chroma similarity",
     }

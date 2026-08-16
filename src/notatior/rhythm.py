@@ -137,6 +137,46 @@ def allocate_voices(notes: list[ScoreNote]) -> None:
             chord_voice[rounded_onset] = note.voice
 
 
+def infer_clefs(notes: list[ScoreNote], measure_quarters: float) -> list[dict]:
+    """Choose conservative treble/bass changes, requiring two measures of evidence."""
+    result: list[dict] = []
+    max_measure = int(
+        max((note.onset_quarters + note.duration_quarters for note in notes), default=0)
+        / measure_quarters
+    )
+    for hand, staff, default, threshold, direction in (
+        ("right", 1, "treble", 55, "below"),
+        ("left", 2, "bass", 60, "above"),
+    ):
+        desired = []
+        for measure in range(max_measure + 1):
+            pitches = [
+                note.midi
+                for note in notes
+                if note.hand == hand
+                and measure <= note.onset_quarters / measure_quarters < measure + 1
+            ]
+            center = median(pitches) if pitches else None
+            alternate = center is not None and (
+                (direction == "below" and center < threshold)
+                or (direction == "above" and center > threshold)
+            )
+            desired.append(
+                "bass"
+                if default == "treble" and alternate
+                else "treble"
+                if default == "bass" and alternate
+                else default
+            )
+        current = default
+        for measure, clef in enumerate(desired):
+            sustained = measure + 1 < len(desired) and desired[measure + 1] == clef
+            if clef != current and sustained:
+                result.append({"measure": measure, "staff": staff, "clef": clef})
+                current = clef
+    return result
+
+
 def normalize(
     raw: list[RawNote], requested_bpm: float | None = None, requested_meter: str | None = None
 ) -> dict:
@@ -160,6 +200,7 @@ def normalize(
             )
         )
     allocate_voices(score_notes)
+    measure_quarters = meter["numerator"] * 4 / meter["denominator"]
     return {
         "bpm": choice["bpm"],
         "phase_seconds": choice["phase_seconds"],
@@ -167,4 +208,5 @@ def normalize(
         "tempo_candidates": ranked,
         "ticks_per_quarter": TICKS_PER_QUARTER,
         "notes": [asdict(note) for note in score_notes],
+        "clefs": infer_clefs(score_notes, measure_quarters),
     }
