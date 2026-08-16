@@ -6,6 +6,7 @@ import shutil
 import stat
 import subprocess
 import tarfile
+import tempfile
 import urllib.request
 from pathlib import Path
 
@@ -103,7 +104,38 @@ def bootstrap(*, skip_large_tools: bool = False) -> dict:
     if not skip_large_tools:
         _install_ffmpeg(root)
         _install_musescore(root)
-    return doctor()
+    report = doctor()
+    if not skip_large_tools:
+        report["smoke_test"] = _smoke_test()
+    return report
+
+
+def _smoke_test() -> dict:
+    from .audio import render_score
+    from .notation import write_musicxml
+
+    score = {
+        "bpm": 120,
+        "phase_seconds": 0,
+        "meter": {"numerator": 4, "denominator": 4},
+        "notes": [
+            {
+                "id": "bootstrap",
+                "midi": 60,
+                "onset_quarters": 0,
+                "duration_quarters": 1,
+                "hand": "right",
+                "voice": 1,
+                "velocity": 72,
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory(prefix="notatior-bootstrap-") as temporary:
+        root = Path(temporary)
+        musicxml = write_musicxml(score, root / "smoke.musicxml", "Notatior smoke test")
+        pdf = render_score(musicxml, root / "smoke.pdf")
+        wav = render_score(musicxml, root / "smoke.wav")
+        return {"ok": True, "pdf_bytes": pdf.stat().st_size, "wav_bytes": wav.stat().st_size}
 
 
 def _version(command: list[str]) -> dict:

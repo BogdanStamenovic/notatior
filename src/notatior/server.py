@@ -39,6 +39,7 @@ class BoundsUpdate(BaseModel):
     right: int
     bottom: int
     first_midi: int | None = None
+    white_key_count: int | None = None
 
 
 ARTIFACTS = {
@@ -164,7 +165,7 @@ def create_app(store: ProjectStore | None = None) -> FastAPI:
             and 0 <= request.top < request.bottom <= height
         ):
             raise HTTPException(422, "Bounds must form a rectangle inside the frame")
-        keys = segment_keys(frame, bounds, request.first_midi)
+        keys = segment_keys(frame, bounds, request.first_midi, request.white_key_count)
         calibration.update(
             bounds=list(bounds),
             first_midi=keys[0].midi if keys else None,

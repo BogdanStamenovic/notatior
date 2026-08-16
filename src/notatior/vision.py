@@ -73,6 +73,21 @@ def find_keyboard(video: Path, analysis_dir: Path) -> dict:
             "No stable keyboard-like bright band was found; manual calibration is required"
         )
     score, timestamp, bounds, frame = max(candidates, key=lambda item: item[0])
+    left, top, right, bottom = bounds
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    row_coverage = (gray > 80).mean(axis=1)
+    expanded_top = top
+    misses = 0
+    minimum_row = max(0, bottom - round(frame.shape[0] * 0.34))
+    for row in range(top - 1, minimum_row - 1, -1):
+        if row_coverage[row] >= 0.28:
+            expanded_top = row
+            misses = 0
+        else:
+            misses += 1
+            if misses >= 3:
+                break
+    bounds = (left, expanded_top, right, bottom)
     analysis_dir.mkdir(parents=True, exist_ok=True)
     frame_path = analysis_dir / "calibration.jpg"
     cv2.imwrite(str(frame_path), frame)
@@ -101,7 +116,10 @@ def _peak_positions(values, minimum_distance: int, threshold: float):
 
 
 def segment_keys(
-    frame, bounds: tuple[int, int, int, int], first_midi: int | None = None
+    frame,
+    bounds: tuple[int, int, int, int],
+    first_midi: int | None = None,
+    white_key_count: int | None = None,
 ) -> list[KeyRegion]:
     cv2, np = _imports()
     left, top, right, bottom = bounds
@@ -114,7 +132,11 @@ def segment_keys(
     peaks = _peak_positions(edge, max(3, expected // 2), float(np.percentile(edge, 82)))
     boundaries = [0] + [p for p in peaks if expected * 0.45 < p < width - expected * 0.45] + [width]
     widths = np.diff(boundaries)
-    if len(boundaries) < 22 or len(boundaries) > 62 or np.median(widths) <= 0:
+    if white_key_count is not None:
+        if not 7 <= white_key_count <= 75:
+            raise VisionError("White-key count must be between 7 and 75")
+        boundaries = [round(i * width / white_key_count) for i in range(white_key_count + 1)]
+    elif len(boundaries) < 22 or len(boundaries) > 62 or np.median(widths) <= 0:
         white_count = (
             52 if width / max(height, 1) > 4.5 else max(14, round(width / max(height * 0.32, 1)))
         )

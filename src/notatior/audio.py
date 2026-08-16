@@ -6,7 +6,7 @@ import wave
 from itertools import pairwise
 from pathlib import Path
 
-from .config import musescore_path
+from .config import ffmpeg_path, musescore_path
 
 
 def _read_wav(path: Path):
@@ -89,12 +89,38 @@ def render_score(musicxml: Path, output: Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ)
     environment.setdefault("QT_QPA_PLATFORM", "offscreen")
-    command = [musescore_path(), "--no-webview", "--export-to", str(output), str(musicxml)]
+    musescore_output = output
+    if output.suffix.lower() == ".wav":
+        musescore_output = output.with_suffix(".render.mp3")
+    command = [musescore_path(), "--export-to", str(musescore_output), str(musicxml)]
     result = subprocess.run(
         command, capture_output=True, text=True, env=environment, timeout=300, check=False
     )
-    if result.returncode or not output.exists():
+    if result.returncode or not musescore_output.exists():
         raise RuntimeError(f"MuseScore export failed: {result.stderr[-1200:]}")
+    if musescore_output != output:
+        conversion = subprocess.run(
+            [
+                ffmpeg_path(),
+                "-y",
+                "-i",
+                str(musescore_output),
+                "-ac",
+                "1",
+                "-ar",
+                "22050",
+                "-c:a",
+                "pcm_s16le",
+                str(output),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        musescore_output.unlink(missing_ok=True)
+        if conversion.returncode or not output.exists():
+            raise RuntimeError(f"Rendered-audio conversion failed: {conversion.stderr[-1200:]}")
     return output
 
 
