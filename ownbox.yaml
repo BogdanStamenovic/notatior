@@ -1,0 +1,19 @@
+schema: 1
+name: notatior
+description: Convert color-changing piano videos into editable sheet music.
+tags: [piano, musicxml, midi, video, transcription]
+install:
+  platforms: [linux]
+  setup:
+    linux:
+      - python -m venv .venv
+      - .venv/bin/python -m pip install -e .
+      - .venv/bin/notatior bootstrap
+  update:
+    linux:
+      - .venv/bin/python -m pip install -e .
+      - .venv/bin/notatior bootstrap
+  remove: []
+command:
+  linux: .venv/bin/notatior
+

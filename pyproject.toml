@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "notatior"
+version = "0.1.0"
+description = "Turn color-changing piano videos into editable notation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Bogdan Stamenovic" }]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+  "python-multipart>=0.0.12,<1",
+  "numpy>=2.0,<3",
+  "opencv-python-headless>=4.10,<5",
+  "scipy>=1.14,<2",
+  "yt-dlp>=2025.1.1",
+]
+
+[project.optional-dependencies]
+dev = ["httpx>=0.27,<1", "pytest>=8,<9", "ruff>=0.9,<1"]
+
+[project.scripts]
+notatior = "notatior.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/notatior"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/notatior/web" = "notatior/web"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
